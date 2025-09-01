@@ -1,0 +1,31 @@
+import re
+import csv
+
+def ecuacion_a_csv(equation_str, archivo_salida="ecuacion_dividida.csv"):
+    # Limpiar encabezados tipo "pH = "
+    ecuacion = equation_str.strip()
+    if ecuacion.lower().startswith("ph ="):
+        ecuacion = ecuacion[4:].strip()
+
+    # Reemplazar ^ por ** para usar regex consistente si quieres, pero aquí lo dejamos tal cual
+
+    # Separar términos por signo + o - que no estén dentro de potencias o coeficientes negativos
+    # Regex para extraer términos con signo incluido
+    terminos = re.findall(r'[+\-]?\s*[^+\-]+', ecuacion)
+
+    # Limpiar espacios de cada término
+    terminos = [t.strip() for t in terminos if t.strip()]
+
+    # Guardar en CSV, una celda por término (en fila)
+    with open(archivo_salida, mode='w', newline='', encoding='utf-8') as f:
+        writer = csv.writer(f)
+        # Escribe una fila con todos los términos como columnas
+        writer.writerow(terminos)
+
+    print(f"Ecuación dividida en {len(terminos)} términos y guardada en '{archivo_salida}'.")
+
+# Ejemplo de uso:
+if __name__ == "__main__":
+    eq = """4.656*X1^4 + X1^3*(27.248 - 0.141*X2) + X1^2*(-13.28*X2^2 + 1.073*X2 + 351.11) + X1*(-1355.698*X2^3 + 96.271*X2^2 - 1.406*X2 + 0.001*X5 + 0.003*Z) + 1433001.184*X10^4 + X10^3*(58779.2 - 0.885*X11) + X10^2*(-103.172*X11^2 + 3.39*X11 + 0.77) + X10*(39.72*X11^3 + 546.198*X11^2 - 0.129*X11 - 6.692) + 126.202*X11^4 + X11^3*(-0.012*X12 - 218.063) + X11^2*(-2.765*X12^2 + 0.202*X12 - 807.651) + X11*(0.312*X12^3 + 49.932*X12^2 - 0.738*X12 - 7.488) - 0.307*X12^4 + X12^3*(-288.6*Z - 5.795) + X12^2*(-32579.392*Z^2 - 267.707*Z - 257.703) + X12*(-134658.857*Z^3 + 24616.797*Z^2 + 367.584*Z - 0.573) + 125669.644*X2^4 + X2^3*(12304.59 - 0.142*X3) + X2^2*(-14.996*X3^2 + 1.058*X3 - 139.303) + X2*(-3.082*X3^3 + 140.664*X3^2 - 1.323*X3 - 0.002*X7 + 0.003*X8 - 0.004*X9 - 2.811) - 37.308*X3^4 + X3^3*(16.86*X4 + 11.032) + X3^2*(46840.306*X4^2 + 994.035*X4 - 394.236) + X3*(64091.169*X4^3 + 1247429.918*X4^2 + 32314.876*X4 - 2.68) + 75466.58*X4^4 + X4^3*(1874834.674 - 8067.223*X5) + X4^2*(-3237583.715*X5^2 - 47078.753*X5 - 6054.457) + X4*(-3287832.739*X5^3 + 510564.752*X5^2 + 8396.294*X5 - 689.129) - 482746.467*X5^4 + X5^3*(375576.46 - 0.051*X6) + X5^2*(-4.427*X6^2 + 0.361*X6 - 19767.529) + X5*(78.38*X6^3 + 56.699*X6^2 - 0.376*X6 - 393.754) + 953.104*X6^4 + X6^3*(-0.177*X7 - 223.452) + X6^2*(-12.38*X7^2 + 1.335*X7 - 229.529) 
++ X6*(13.963*X7^3 + 118.525*X7^2 - 1.739*X7 - 0.795) + 59.783*X7^4 + X7^3*(-0.013*X8 - 112.665) + X7^2*(-2.756*X8^2 + 0.203*X8 - 345.464) + X7*(0.309*X8^3 + 49.819*X8^2 - 0.749*X8 - 3.475) - 0.347*X8^4 + X8^3*(-78.933*X9 - 5.581) + X8^2*(-8241.654*X9^2 - 43.896*X9 - 257.257) + X8*(-158836.406*X9^3 + 5075.389*X9^2 + 91.899*X9 - 0.616) + 3491002.23*X9^4 + X9^3*(195929.525 - 0.339*X10) + X9^2*(-30.835*X10^2 + 2.245*X10 - 11.839) + X9*(-5594.571*X10^3 + 180.431*X10^2 - 1.545*X10 - 32.498) 4 + X9^3*(195929.525 - 0.339*X10) + X9^2*(-30.835*X10^2 + 2.245*X10 - 11.839) + X9*(-5594.571*X10^3 + 180.431*X10^2 - 1.545*X10 - 32.498) + 3679907.081*Z^4 + 204829.732*Z^3 - 3323.672*Z^2 - 86.629*Z + 8.634"""
+    ecuacion_a_csv(eq)
