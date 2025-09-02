@@ -49,55 +49,155 @@ def determinar_tipo_titulante(df):
     else:
         return False
 
+# =============================================================================
+# FUNCIONES PARA COMPUESTOS COMPLEJOS (MODELO UNIFICADO CORREGIDO)
+# =============================================================================
+
 def modelo_unificado_complejos(Xeq, Cr, alpha, k_acida, k_alcalina, pH0, pH_min, pH_max):
     """
-    Para compuestos COMPLEJOS: 
-    - s() usa Xeq con signo ✓
-    - pH cálculos usan |Xeq| ✓
+    Para compuestos COMPLEJOS - Modelo corregido
     """
     Xeq_equiv = alpha * Cr
-    s = 1 / (1 + np.exp(-10 * Xeq))  # ← Xeq CON signo (para transición)
     
-    # Usar valor absoluto para cálculos de pH (Xeq^a = |Xeq|)
-    Xeq_abs = (Xeq)  # ← Valor absoluto para ecuaciones
+    # Función de transición suave centrada en Xeq=0
+    s = 1 / (1 + np.exp(-10 * Xeq))
     
-    # REGIÓN ÁCIDA: Xeq^a + alpha*Cr
-    pH_acida = pH0 - (pH0 - pH_min) / (1 + np.exp(k_acida * (Xeq_abs + Xeq_equiv)))
+    # REGIÓN ÁCIDA CORREGIDA: Xeq + Xeq_equiv
+    pH_acida = pH0 - (pH0 - pH_min) / (1 + np.exp(k_acida * (Xeq + Xeq_equiv)))
     
-    # REGIÓN ALCALINA: Xeq^b - alpha*Cr  
-    pH_alcalina = pH0 + (pH_max - pH0) / (1 + np.exp(-k_alcalina * (Xeq_abs - Xeq_equiv)))
+    # REGIÓN ALCALINA CORREGIDA: Xeq - Xeq_equiv  
+    pH_alcalina = pH0 + (pH_max - pH0) / (1 + np.exp(-k_alcalina * (Xeq - Xeq_equiv)))
     
     return (1 - s) * pH_acida + s * pH_alcalina
 
-def modelo_unificado_simples(Xeq, Cr, alpha, k_acida, k_alcalina, pH0, pH_min, pH_max):
-    """
-    Para compuestos SIMPLES: 
-    - s() usa Xeq con signo ✓  
-    - pH cálculos usan |Xeq| ✓
-    """
-    Xeq_equiv = alpha * Cr
-    s = 1 / (1 + np.exp(-10 * Xeq))  # ← Xeq CON signo
-    
-    # Usar valor absoluto para cálculos de pH
-    Xeq_abs = (Xeq)  # ← Valor absoluto para ecuaciones
-    
-    # REGIÓN ÁCIDA: Xeq^a - alpha*Cr
-    pH_acida = pH0 - (pH0 - pH_min) / (1 + np.exp(k_acida * (Xeq_abs - Xeq_equiv)))
-    
-    # REGIÓN ALCALINA: Xeq^b - alpha*Cr  
-    pH_alcalina = pH0 + (pH_max - pH0) / (1 + np.exp(-k_alcalina * (Xeq_abs - Xeq_equiv)))
-    
-    return (1 - s) * pH_acida + s * pH_alcalina
+# =============================================================================
+# FUNCIONES ORIGINALES PARA COMPUESTOS SIMPLES (NO MODIFICAR)
+# =============================================================================
 
-def modelo_unificado_ajuste(Xeq, alpha, k_acida, k_alcalina, pH0, pH_min, pH_max, Cr, es_complejo):
-    """Wrapper para curve_fit que selecciona el modelo correcto"""
-    if es_complejo:
-        return modelo_unificado_complejos(Xeq, Cr, alpha, k_acida, k_alcalina, pH0, pH_min, pH_max)
-    else:
-        return modelo_unificado_simples(Xeq, Cr, alpha, k_acida, k_alcalina, pH0, pH_min, pH_max)
+def pH_acido(Xeq, Cr, alpha, k_acida, pH0, pH_min):
+    """Ecuación para pH ácido (pH < pH0) - CORREGIDA"""
+    return pH0 - (pH0 - pH_min) / (1 + np.exp(k_acida * (Xeq - alpha * Cr)))
 
-def calcular_alpha_inicial(Xeq_measured, Cr, k, pH0, pH_limite, pH_measured, es_acido=True):
-    """Calcula alpha inicial para cualquier región"""
+def pH_alcalino(Xeq, Cr, alpha, k_alcalina, pH0, pH_max):
+    """Ecuación para pH alcalino (pH > pH0)"""
+    return pH0 + (pH_max - pH0) / (1 + np.exp(-k_alcalina * (Xeq - alpha * Cr)))
+
+def modelo_simple_ajuste(Xeq, alpha, k_acida, k_alcalina, pH0, pH_min, pH_max, Cr, pH_medidos):
+    """Función de ajuste para compuestos simples"""
+    resultados = []
+    for i, x in enumerate(Xeq):
+        if pH_medidos[i] < pH0:
+            resultados.append(pH_acido(x, Cr, alpha, k_acida, pH0, pH_min))
+        else:
+            resultados.append(pH_alcalino(x, Cr, alpha, k_alcalina, pH0, pH_max))
+    return np.array(resultados)
+
+def calcular_alpha_inicial_acido(Xeq_measured, Cr, k, pH0, pH_min, pH_measured):
+    """Calcula alpha inicial para región ácida - FÓRMULA CORREGIDA"""
+    try:
+        termino = (pH0 - pH_min) / max(0.001, (pH0 - pH_measured)) - 1
+        if termino <= 0:
+            return 0.1
+        termino_log = np.log(max(1e-10, termino))
+        alpha = (Xeq_measured - (1/k) * termino_log) / Cr
+        return max(0.001, min(10.0, alpha))
+    except Exception as e:
+        print(f"    Error calculando alpha ácido: {e}")
+        return 0.1
+
+def calcular_alpha_inicial_alcalino(Xeq_measured, Cr, k, pH0, pH_max, pH_measured):
+    """Calcula alpha inicial para región alcalina"""
+    try:
+        termino = (pH_max - pH0) / max(0.001, (pH_measured - pH0)) - 1
+        if termino <= 0:
+            return 0.1
+        termino_log = np.log(max(1e-10, termino))
+        alpha = (Xeq_measured + (1/k) * termino_log) / Cr
+        return max(0.001, min(10.0, alpha))
+    except Exception as e:
+        print(f"    Error calculando alpha alcalino: {e}")
+        return 0.1
+
+def optimizar_parametros_simple(Xeq_datos, pH_datos, Cr, pH0, pH_min, pH_max):
+    """Optimiza parámetros para compuestos simples (modelo original)"""
+    
+    print("  Usando modelo ORIGINAL para compuestos simples")
+    
+    # Separar datos en regiones ácida y alcalina
+    mascara_acida = pH_datos < pH0
+    mascara_alcalina = pH_datos >= pH0
+    
+    Xeq_acidos = Xeq_datos[mascara_acida]
+    pH_acidos = pH_datos[mascara_acida]
+    
+    Xeq_alcalinos = Xeq_datos[mascara_alcalina]
+    pH_alcalinos = pH_datos[mascara_alcalina]
+    
+    # Valores iniciales
+    k_acida_inicial = 1000
+    k_alcalina_inicial = 1000
+    
+    # Calcular alpha inicial para cada región
+    alphas_iniciales_acidos = []
+    for i in range(len(Xeq_acidos)):
+        try:
+            alpha_i = calcular_alpha_inicial_acido(Xeq_acidos[i], Cr, k_acida_inicial, pH0, pH_min, pH_acidos[i])
+            if not np.isnan(alpha_i) and np.isfinite(alpha_i) and 0 < alpha_i < 10:
+                alphas_iniciales_acidos.append(alpha_i)
+        except:
+            continue
+    
+    alphas_iniciales_alcalinos = []
+    for i in range(len(Xeq_alcalinos)):
+        try:
+            alpha_i = calcular_alpha_inicial_alcalino(Xeq_alcalinos[i], Cr, k_alcalina_inicial, pH0, pH_max, pH_alcalinos[i])
+            if not np.isnan(alpha_i) and np.isfinite(alpha_i) and 0 < alpha_i < 10:
+                alphas_iniciales_alcalinos.append(alpha_i)
+        except:
+            continue
+    
+    # Promediar los alpha de ambas regiones
+    alpha_acida = np.mean(alphas_iniciales_acidos) if alphas_iniciales_acidos else 0.1
+    alpha_alcalina = np.mean(alphas_iniciales_alcalinos) if alphas_iniciales_alcalinos else 0.1
+    alpha_inicial = (alpha_acida + alpha_alcalina) / 2
+    
+    print(f"  Valores iniciales: alpha={alpha_inicial:.6f}, k_acida={k_acida_inicial}, k_alcalina={k_alcalina_inicial}")
+    
+    # Función wrapper para curve_fit
+    def funcion_ajuste(Xeq, alpha, k_acida, k_alcalina):
+        return modelo_simple_ajuste(Xeq, alpha, k_acida, k_alcalina, pH0, pH_min, pH_max, Cr, pH_datos)
+    
+    # Optimización
+    try:
+        parametros_opt, covarianza = curve_fit(
+            funcion_ajuste, 
+            Xeq_datos, 
+            pH_datos,
+            p0=[alpha_inicial, k_acida_inicial, k_alcalina_inicial],
+            bounds=([0.0001, 1, 1], [10, 1000000, 1000000]),
+            maxfev=10000
+        )
+        
+        alpha_opt, k_acida_opt, k_alcalina_opt = parametros_opt
+        
+        # Predecir valores con el modelo optimizado
+        pH_pred = modelo_simple_ajuste(Xeq_datos, alpha_opt, k_acida_opt, k_alcalina_opt, 
+                                     pH0, pH_min, pH_max, Cr, pH_datos)
+        
+        print(f"  Parámetros optimizados: alpha={alpha_opt:.6f}, k_acida={k_acida_opt:.2f}, k_alcalina={k_alcalina_opt:.2f}")
+        
+        return alpha_opt, k_acida_opt, k_alcalina_opt, covarianza, pH_pred
+        
+    except Exception as e:
+        print(f"  Error en optimización simple: {e}")
+        return None, None, None, None, None
+
+# =============================================================================
+# FUNCIONES PARA COMPUESTOS COMPLEJOS (OPTIMIZACIÓN)
+# =============================================================================
+
+def calcular_alpha_inicial_complejos(Xeq_measured, Cr, k, pH0, pH_limite, pH_measured, es_acido=True):
+    """Calcula alpha inicial para cualquier región (complejos)"""
     try:
         if es_acido:
             termino = (pH0 - pH_limite) / max(0.001, (pH0 - pH_measured)) - 1
@@ -119,29 +219,24 @@ def calcular_alpha_inicial(Xeq_measured, Cr, k, pH0, pH_limite, pH_measured, es_
         print(f"    Error calculando alpha: {e}")
         return 0.1
 
-def optimizar_parametros_unificado(Xeq_datos, pH_datos, Cr, pH0, pH_min, pH_max, es_complejo=False):
-    """Optimiza parámetros usando el modelo unificado"""
+def optimizar_parametros_complejos(Xeq_datos, pH_datos, Cr, pH0, pH_min, pH_max):
+    """Optimiza parámetros usando el modelo unificado para complejos"""
     
-    print("  Usando modelo unificado con transición suave")
+    print("  Usando modelo UNIFICADO para compuestos complejos")
     
-    # Valores iniciales según tipo de reactivo
-    if es_complejo:
-        k_acida_inicial = 100
-        k_alcalina_inicial = 1000
-        bounds = ([0.0001, 1, 10], [5, 1000, 50000])
-    else:
-        k_acida_inicial = 1000
-        k_alcalina_inicial = 1000
-        bounds = ([0.0001, 1, 1], [10, 1000000, 1000000])
+    # Valores iniciales para compuestos complejos
+    k_acida_inicial = 100
+    k_alcalina_inicial = 1000
+    bounds = ([0.0001, 1, 10], [5, 1000, 50000])
     
     # Calcular alpha inicial promedio
     alphas_iniciales = []
     for i in range(len(Xeq_datos)):
         try:
             if pH_datos[i] < pH0:
-                alpha_i = calcular_alpha_inicial(Xeq_datos[i], Cr, k_acida_inicial, pH0, pH_min, pH_datos[i], es_acido=True)
+                alpha_i = calcular_alpha_inicial_complejos(Xeq_datos[i], Cr, k_acida_inicial, pH0, pH_min, pH_datos[i], es_acido=True)
             else:
-                alpha_i = calcular_alpha_inicial(Xeq_datos[i], Cr, k_alcalina_inicial, pH0, pH_max, pH_datos[i], es_acido=False)
+                alpha_i = calcular_alpha_inicial_complejos(Xeq_datos[i], Cr, k_alcalina_inicial, pH0, pH_max, pH_datos[i], es_acido=False)
             
             if not np.isnan(alpha_i) and np.isfinite(alpha_i) and 0 < alpha_i < 10:
                 alphas_iniciales.append(alpha_i)
@@ -156,8 +251,7 @@ def optimizar_parametros_unificado(Xeq_datos, pH_datos, Cr, pH0, pH_min, pH_max,
     try:
         # Crear función temporal con parámetros fijos
         def funcion_temporal(X, alpha, k_acida, k_alcalina):
-            return modelo_unificado_ajuste(X, alpha, k_acida, k_alcalina, 
-                                         pH0, pH_min, pH_max, Cr, es_complejo)
+            return modelo_unificado_complejos(X, Cr, alpha, k_acida, k_alcalina, pH0, pH_min, pH_max)
         
         parametros_opt, covarianza = curve_fit(
             funcion_temporal, 
@@ -165,28 +259,25 @@ def optimizar_parametros_unificado(Xeq_datos, pH_datos, Cr, pH0, pH_min, pH_max,
             pH_datos,
             p0=[alpha_inicial, k_acida_inicial, k_alcalina_inicial],
             bounds=bounds,
-            maxfev=20000 if es_complejo else 10000
+            maxfev=20000
         )
         
         alpha_opt, k_acida_opt, k_alcalina_opt = parametros_opt
 
-        # Predecir con modelo unificado - ¡AGREGAR es_complejo!
-        pH_pred = modelo_unificado_ajuste(Xeq_datos, alpha_opt, k_acida_opt, k_alcalina_opt, 
-                                        pH0, pH_min, pH_max, Cr, es_complejo)
+        # Predecir con modelo unificado
+        pH_pred = modelo_unificado_complejos(Xeq_datos, Cr, alpha_opt, k_acida_opt, k_alcalina_opt, pH0, pH_min, pH_max)
 
         print(f"  Parámetros optimizados: alpha={alpha_opt:.6f}, k_acida={k_acida_opt:.2f}, k_alcalina={k_alcalina_opt:.2f}")
         
         return alpha_opt, k_acida_opt, k_alcalina_opt, covarianza, pH_pred
         
     except Exception as e:
-        print(f"  Error en optimización unificada: {e}")
+        print(f"  Error en optimización para complejos: {e}")
         return None, None, None, None, None
 
-# ... (LAS FUNCIONES DE MÉTRICAS, ESTADÍSTICAS Y GRÁFICOS SE MANTIENEN IGUAL)
-# calcular_f_statistic, calcular_aic_bic, calcular_error_estandar_parametros,
-# prueba_normalidad_residuos, calcular_metricas_error, calcular_estadisticas_globales,
-# mostrar_estadisticas_individuales, mostrar_estadisticas_globales, graficar_resultados_combinados
-# SE MANTIENEN EXACTAMENTE IGUAL
+# =============================================================================
+# FUNCIONES DE MÉTRICAS, ESTADÍSTICAS Y GRÁFICOS (SE MANTIENEN IGUAL)
+# =============================================================================
 
 def calcular_f_statistic(y_real, y_pred, n_params):
     """
@@ -427,8 +518,6 @@ def mostrar_estadisticas_individuales(resultados, reactivo_seleccionado):
         print(f"  SSE: {result['metricas']['SSE']:.4f}")
         print(f"  SST: {result['metricas']['SST']:.4f}")
         
-        
-        
         print(f"\nPrueba de normalidad (Shapiro-Wilk):")
         print(f"  Estadístico: {result['metricas']['Shapiro-Wilk_stat']:.4f}")
         print(f"  p-value: {result['metricas']['Shapiro-Wilk_p']:.4f}")
@@ -579,8 +668,6 @@ def analizar_reactivo(df, reactivo_seleccionado):
     es_complejo = es_reactivo_complejo(reactivo_seleccionado)
     print(f"  Reactivo clasificado como: {'COMPLEJO' if es_complejo else 'SIMPLE'}")
     
-    # ... (el resto del análisis)
-    
     df_reactivo = df[df['Reactivo'] == reactivo_seleccionado]
     
     if df_reactivo.empty:
@@ -591,7 +678,6 @@ def analizar_reactivo(df, reactivo_seleccionado):
     print(f"Concentraciones encontradas: {concentraciones}")
     
     es_acido = determinar_tipo_titulante(df_reactivo)
-    es_complejo = es_reactivo_complejo(reactivo_seleccionado)
     resultados = {}
     
     for conc in concentraciones:
@@ -611,8 +697,11 @@ def analizar_reactivo(df, reactivo_seleccionado):
         print(f"  pH0 (X_eq=0): {pH0:.2f}, pH_min: {pH_min:.2f}, pH_max: {pH_max:.2f}")
         print(f"  Rango de equivalentes: [{np.min(Xeq_datos):.4f}, {np.max(Xeq_datos):.4f}]")
         
-        # SIEMPRE usar modelo unificado (eliminamos la distinción simple/complejo en el modelo)
-        resultado_opt = optimizar_parametros_unificado(Xeq_datos, pH_datos, conc, pH0, pH_min, pH_max, es_complejo)
+        # SELECCIONAR EL MODELO CORRECTO SEGÚN EL TIPO DE REACTIVO
+        if es_complejo:
+            resultado_opt = optimizar_parametros_complejos(Xeq_datos, pH_datos, conc, pH0, pH_min, pH_max)
+        else:
+            resultado_opt = optimizar_parametros_simple(Xeq_datos, pH_datos, conc, pH0, pH_min, pH_max)
         
         if resultado_opt[0] is not None:
             alpha_opt, k_acida_opt, k_alcalina_opt, covarianza, pH_pred = resultado_opt
