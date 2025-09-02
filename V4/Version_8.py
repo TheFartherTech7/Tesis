@@ -13,10 +13,16 @@ plt.rcParams['font.size'] = 12
 
 # CATALOGACIÓN DE REACTIVOS COMPLEJOS
 REACTIVOS_COMPLEJOS = ['Ex. Levadura', 'Melaza', 'Suero leche']
+REACTIVO_BUFFER = ["K2HPO4"]
 
 def es_reactivo_complejo(reactivo):
     """Determina si un reactivo es complejo basado en la lista predefinida"""
     return any(compuesto.lower() in reactivo.lower() for compuesto in REACTIVOS_COMPLEJOS)
+
+def es_reactivo_buffer(reactivo): 
+    """Determina si un reactivo es buffer basado en la lista predefinida""" 
+    return any(compuesto.lower() in reactivo.lower() for compuesto in REACTIVO_BUFFER)
+
 
 def cargar_datos(archivo_csv):
     """Carga y valida los datos del archivo CSV"""
@@ -48,6 +54,46 @@ def determinar_tipo_titulante(df):
         return True
     else:
         return False
+    
+# =============================================================================
+# MODELO ESPECIAL PARA BUFFERS (K2HPO4) - VERSIÓN CORREGIDA
+# =============================================================================
+def modelo_buffer(Xeq, Cr, alpha, k_acida, k_alcalina, pH0, pH_min, pH_max, 
+                 centro_meseta=0, ancho_meseta=0.001):
+    """
+    Modelo especial para K2HPO4 con tres regiones basadas en Xeq:
+    - Región ácida: sigmoide para Xeq < (centro_meseta - ancho_meseta/2)
+    - Región buffer: meseta plana para valores intermedios de Xeq
+    - Región básica: sigmoide para Xeq > (centro_meseta + ancho_meseta/2)
+    """
+    # Calcular los puntos de transición basados en Xeq
+    X_transicion1 = centro_meseta - ancho_meseta/2
+    X_transicion2 = centro_meseta + ancho_meseta/2
+    
+    # 1. Función sigmoidal ácida (modificada para región ácida)
+    def sigmoide_acida(x):
+        return pH0 - (pH0 - pH_min) / (1 + np.exp(k_acida * (x - alpha * Cr)))
+    
+    # 2. Función sigmoidal básica (modificada para región básica)  
+    def sigmoide_basica(x):
+        return pH0 + (pH_max - pH0) / (1 + np.exp(-k_alcalina * (x - alpha * Cr)))
+    
+    # 3. Valor de pH en la meseta (promedio entre las dos transiciones)
+    pH_meseta = (sigmoide_acida(X_transicion1) + sigmoide_basica(X_transicion2)) / 2
+    
+    # 4. Funciones de transición suave basadas en Xeq (no en pH)
+    T1 = 1 / (1 + np.exp(-1000 * (Xeq - X_transicion1)))  # Transición ácido→buffer
+    T2 = 1 / (1 + np.exp(-1000 * (Xeq - X_transicion2)))  # Transición buffer→básico
+    
+    # 5. Combinación de las tres regiones
+    region_acida = sigmoide_acida(Xeq)
+    region_basica = sigmoide_basica(Xeq)
+    
+    # Mezcla ponderada: (1-T1)*ácida + (T1-T2)*meseta + T2*básica
+    pH_total = (1 - T1) * region_acida + (T1 - T2) * pH_meseta + T2 * region_basica
+    
+    return np.clip(pH_total, pH_min, pH_max)
+
 
 # =============================================================================
 # FUNCIONES PARA COMPUESTOS COMPLEJOS (MODELO UNIFICADO CORREGIDO)
@@ -274,7 +320,61 @@ def optimizar_parametros_complejos(Xeq_datos, pH_datos, Cr, pH0, pH_min, pH_max)
     except Exception as e:
         print(f"  Error en optimización para complejos: {e}")
         return None, None, None, None, None
-
+    
+# =============================================================================
+# OPTIMIZACIÓN PARA BUFFER - VERSIÓN MEJORADA
+# =============================================================================
+def optimizar_parametros(Xeq_datos, pH_datos, Cr, pH0, pH_min, pH_max, reactivo):
+    """
+    Selecciona automáticamente el modelo correcto con mejores parámetros iniciales
+    """
+    if es_reactivo_buffer(reactivo):
+        print(f"  Usando modelo ESPECIAL BUFFER para {reactivo}")
+        
+        # VALORES INICIALES MEJORADOS para buffer
+        alpha_inicial = 0.8  # Mayor capacidad buffer
+        k_acida_inicial = 500  # Menos abrupto para región ácida
+        k_alcalina_inicial = 500  # Menos abrupto para región básica
+        centro_meseta_inicial = np.median(Xeq_datos)  # Centro de la meseta en la mediana de Xeq
+        ancho_meseta_inicial = (np.max(Xeq_datos) - np.min(Xeq_datos)) * 0.3  # 30% del rango
+        
+        # Función wrapper con parámetros adicionales
+        def funcion_ajuste(Xeq, alpha, k_acida, k_alcalina, centro_meseta, ancho_meseta):
+            return modelo_buffer(Xeq, Cr, alpha, k_acida, k_alcalina, pH0, 
+                               pH_min, pH_max, centro_meseta, ancho_meseta)
+        
+        try:
+            # BOUNDS MÁS FLEXIBLES para buffers
+            parametros_opt, covarianza = curve_fit(
+                funcion_ajuste, 
+                Xeq_datos, 
+                pH_datos,
+                p0=[alpha_inicial, k_acida_inicial, k_alcalina_inicial,
+                    centro_meseta_inicial, ancho_meseta_inicial],
+                bounds=([0.1, 10, 10, -0.1, 0.0001], 
+                       [5.0, 5000, 5000, 0.1, 0.1]),
+                maxfev=20000  # Más iteraciones
+            )
+            
+            alpha_opt, k_acida_opt, k_alcalina_opt, centro_opt, ancho_opt = parametros_opt
+            pH_pred = modelo_buffer(Xeq_datos, Cr, alpha_opt, k_acida_opt, k_alcalina_opt,
+                                  pH0, pH_min, pH_max, centro_opt, ancho_opt)
+            
+            print(f"  Parámetros optimizados (buffer):")
+            print(f"    alpha={alpha_opt:.6f}, k_acida={k_acida_opt:.2f}, k_alcalina={k_alcalina_opt:.2f}")
+            print(f"    centro_meseta={centro_opt:.6f}, ancho_meseta={ancho_opt:.6f}")
+            
+            return alpha_opt, k_acida_opt, k_alcalina_opt, covarianza, pH_pred
+        
+        except Exception as e:
+            print(f"  Error en optimización buffer: {e}")
+            # Fallback al modelo simple si falla el buffer
+            print("  Intentando con modelo simple como fallback...")
+            return optimizar_parametros_simple(Xeq_datos, pH_datos, Cr, pH0, pH_min, pH_max)
+    
+    else:
+        return optimizar_parametros_simple(Xeq_datos, pH_datos, Cr, pH0, pH_min, pH_max)
+    
 # =============================================================================
 # FUNCIONES DE MÉTRICAS, ESTADÍSTICAS Y GRÁFICOS (SE MANTIENEN IGUAL)
 # =============================================================================
@@ -666,7 +766,9 @@ def analizar_reactivo(df, reactivo_seleccionado):
     """Analiza todas las concentraciones de un reactivo específico"""
     
     es_complejo = es_reactivo_complejo(reactivo_seleccionado)
-    print(f"  Reactivo clasificado como: {'COMPLEJO' if es_complejo else 'SIMPLE'}")
+    es_buffer = es_reactivo_buffer(reactivo_seleccionado)
+    
+    print(f"  Reactivo clasificado como: {'BUFFER' if es_buffer else 'COMPLEJO' if es_complejo else 'SIMPLE'}")
     
     df_reactivo = df[df['Reactivo'] == reactivo_seleccionado]
     
@@ -698,7 +800,10 @@ def analizar_reactivo(df, reactivo_seleccionado):
         print(f"  Rango de equivalentes: [{np.min(Xeq_datos):.4f}, {np.max(Xeq_datos):.4f}]")
         
         # SELECCIONAR EL MODELO CORRECTO SEGÚN EL TIPO DE REACTIVO
-        if es_complejo:
+        if es_buffer:
+            # USAR MODELO BUFFER PARA K2HPO4
+            resultado_opt = optimizar_parametros(Xeq_datos, pH_datos, conc, pH0, pH_min, pH_max, reactivo_seleccionado)
+        elif es_complejo:
             resultado_opt = optimizar_parametros_complejos(Xeq_datos, pH_datos, conc, pH0, pH_min, pH_max)
         else:
             resultado_opt = optimizar_parametros_simple(Xeq_datos, pH_datos, conc, pH0, pH_min, pH_max)
